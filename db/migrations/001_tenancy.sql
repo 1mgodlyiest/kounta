@@ -4,10 +4,24 @@
 --   SET app.current_business_id = '<uuid>';
 -- All tenant tables carry business_id UUID NOT NULL REFERENCES businesses(id).
 
--- Session helper: NULL when unauthenticated -> policies match zero rows (fail closed).
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS citext;
+
+-- Session helper: NULL when unauthenticated/malformed -> policies match zero rows (fail closed).
 CREATE OR REPLACE FUNCTION current_business_id() RETURNS uuid
-  LANGUAGE sql STABLE AS
-$$ SELECT NULLIF(current_setting('app.current_business_id', true), '')::uuid $$;
+  LANGUAGE plpgsql STABLE AS
+$$
+DECLARE
+  raw text := NULLIF(current_setting('app.current_business_id', true), '');
+BEGIN
+  IF raw IS NULL THEN RETURN NULL; END IF;
+  BEGIN
+    RETURN raw::uuid;
+  EXCEPTION WHEN invalid_text_representation THEN
+    RETURN NULL;
+  END;
+END;
+$$;
 
 -- Root tenant table. No business_id here by definition; access gated in app layer.
 CREATE TABLE IF NOT EXISTS businesses (
