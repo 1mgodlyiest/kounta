@@ -59,3 +59,7 @@ CREATE OR REPLACE VIEW inventory_reorder_alerts AS
 SELECT business_id, item_id, qty, reorder_point, avg_cost_cents
   FROM inventory_levels
  WHERE qty <= reorder_point;
+
+-- RLS leak fix: run the view as the invoker so callers see only their own
+-- business rows (default security_definer would bypass caller RLS).
+ALTER VIEW inventory_reorder_alerts SET (security_invoker = true);
