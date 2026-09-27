@@ -1,0 +1,9 @@
+{
+	map {
+		@kounta {host} {ca-central-1}
+	}
+}
+
+{$DOMAIN} {
+	reverse_proxy app:3000
+}
