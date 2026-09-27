@@ -39,12 +39,16 @@ def tax_for(subtotal_cents, province, rate_bps):
     return (subtotal_cents * rate_bps) // 10_000
 
 
-def transition_quote(status):
+def transition_quote(status, to):
     _check_flow(status, QUOTE_FLOW, "quote")
-    nxt = {"draft": "sent", "sent": "accepted", "sent": "expired"}
-    if status not in nxt:
-        raise ValueError(f"quote cannot move from {status!r}")
-    return nxt[status]
+    _check_flow(to, QUOTE_FLOW, "quote")
+    allowed = {
+        "draft": ("sent",),
+        "sent": ("accepted", "expired"),
+    }
+    if to not in allowed.get(status, ()):
+        raise ValueError(f"quote cannot move {status!r} -> {to!r}")
+    return to
 
 
 def transition_order(status, to):

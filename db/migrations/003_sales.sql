@@ -27,23 +27,63 @@ CREATE TABLE IF NOT EXISTS reservations (
 CREATE INDEX IF NOT EXISTS reservations_business_id_idx ON reservations (business_id);
 CREATE INDEX IF NOT EXISTS reservations_item_idx ON reservations (business_id, item_id);
 
--- Ledger balance guard (T1/T2): every txn must net to zero per business.
--- Deferred constraint trigger: checked at COMMIT, so multi-row balanced writes pass,
--- unbalanced or 1-cent-off txns fail the commit.
+-- Atomic reservation guard (oversell fix): locks the inventory row, then
+-- refuses the reservation when free stock (on hand minus other reservations)
+-- is short. Callers MUST reserve through this proc, not raw INSERTs.
+CREATE OR REPLACE FUNCTION reserve_stock(
+  p_business_id uuid, p_order_id uuid, p_item_id uuid, p_qty integer
+) RETURNS void LANGUAGE plpgsql AS
+$$
+DECLARE
+  on_hand   integer;
+  held      integer;
+BEGIN
+  IF p_qty <= 0 THEN
+    RAISE EXCEPTION 'reserve qty must be > 0' USING ERRCODE = 'check_violation';
+  END IF;
+  SELECT qty INTO on_hand FROM inventory_levels
+   WHERE business_id = p_business_id AND item_id = p_item_id
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'no inventory row for item %', p_item_id USING ERRCODE = 'foreign_key_violation';
+  END IF;
+  SELECT COALESCE(SUM(qty), 0) INTO held FROM reservations
+   WHERE business_id = p_business_id AND item_id = p_item_id
+     AND order_id <> p_order_id;
+  IF held + p_qty > on_hand THEN
+    RAISE EXCEPTION 'oversell refused: on_hand=% held=% requested=%', on_hand, held, p_qty
+      USING ERRCODE = 'check_violation';
+  END IF;
+  INSERT INTO reservations (business_id, order_id, item_id, qty)
+  VALUES (p_business_id, p_order_id, p_item_id, p_qty)
+  ON CONFLICT (business_id, order_id, item_id)
+  DO UPDATE SET qty = reservations.qty + EXCLUDED.qty;
+  -- Re-check after upsert against the fresh total (covers re-reserve path).
+  SELECT COALESCE(SUM(qty), 0) INTO held FROM reservations
+   WHERE business_id = p_business_id AND item_id = p_item_id;
+  IF held > on_hand THEN
+    RAISE EXCEPTION 'oversell refused: on_hand=% held=%', on_hand, held
+      USING ERRCODE = 'check_violation';
+  END IF;
+END;
+$$;
+
+-- Ledger balance guard (T1/T2): scoped to the touched txn only.
+-- Deferred constraint trigger: checked at COMMIT per touched row, so
+-- multi-row balanced writes pass, unbalanced/1-cent-off txns fail, and
+-- pre-existing (M1 seed) txns are never scanned. NOTE: if the live DB
+-- still holds an unbalanced M1 seed txn, Janus must delete/rebalance it;
+-- this trigger intentionally ignores rows it did not touch.
 CREATE OR REPLACE FUNCTION ledger_txn_must_balance() RETURNS trigger
   LANGUAGE plpgsql AS
 $$
-DECLARE bad uuid;
+DECLARE net integer;
 BEGIN
-  SELECT t.txn_id INTO bad FROM (
-    SELECT txn_id, business_id,
-           SUM(CASE WHEN side = 'debit' THEN amount_cents ELSE -amount_cents END) AS net
-      FROM ledger_entries
-     WHERE (pg_trigger_depth() = 0 OR true)
-     GROUP BY txn_id, business_id
-  ) t WHERE t.net <> 0 LIMIT 1;
-  IF FOUND THEN
-    RAISE EXCEPTION 'ledger txn % does not balance', bad USING ERRCODE = 'check_violation';
+  SELECT COALESCE(SUM(CASE WHEN side = 'debit' THEN amount_cents ELSE -amount_cents END), 0)
+    INTO net FROM ledger_entries
+   WHERE txn_id = NEW.txn_id AND business_id = NEW.business_id;
+  IF net <> 0 THEN
+    RAISE EXCEPTION 'ledger txn % does not balance (net=%)', NEW.txn_id, net USING ERRCODE = 'check_violation';
   END IF;
   RETURN NULL;
 END;
