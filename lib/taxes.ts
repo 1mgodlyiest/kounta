@@ -1,7 +1,10 @@
-// Province tax tables (Canada). TODO: replace with server source of truth.
+// Province tax preview for UI (float dollars). Rate source of truth is
+// src/lib/tax.ts (Lin, integer-cents); PROVINCES derives from it — keep both.
+import { TAX_TABLE } from "../src/lib/tax";
+
 export type Province = "ON" | "QC" | "BC" | "AB" | "MB" | "SK" | "NS" | "NB" | "NL" | "PE" | "NT" | "YT" | "NU";
 
-export const PROVINCES: Province[] = ["ON", "QC", "BC", "AB", "MB", "SK", "NS", "NB", "NL", "PE", "NT", "YT", "NU"];
+export const PROVINCES: Province[] = TAX_TABLE.map((t) => t.province as Province);
 
 export interface TaxBreakdown {
   lines: { label: string; rate: number; amount: number }[];
@@ -25,7 +28,7 @@ export function taxFor(subtotal: number, province: Province): TaxBreakdown {
     case "AB": case "NT": case "YT": case "NU":
       return { lines: [{ label: "GST 5%", rate: 0.05, amount: r(subtotal * 0.05) }], total: r(subtotal * 1.05) };
     default: {
-      const hstRate = province === "NS" || "NB" || "NL" || "PE" ? 0.15 : 0.15;
+      const hstRate = 0.15;
       return { lines: [{ label: `HST 15%`, rate: hstRate, amount: r(subtotal * hstRate) }], total: r(subtotal * (1 + hstRate)) };
     }
   }
