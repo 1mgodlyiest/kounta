@@ -1,0 +1,9 @@
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+generator client { provider = "prisma-client-js" }
+
+model Company { id String @id @default(cuid()); name String; users User[]; quotes Quote[]; jobs Job[]; invoices Invoice[]; ledgerEntries LedgerEntry[] }
+model User { id String @id @default(cuid()); company_id String; email String @unique; company Company @relation(fields: [company_id], references: [id]); @@index([company_id]) }
+model Quote { id String @id @default(cuid()); company_id String; status String @default("draft"); total_cents Int @default(0); company Company @relation(fields: [company_id], references: [id]); @@index([company_id]) }
+model Job { id String @id @default(cuid()); company_id String; stage String @default("new"); due DateTime?; company Company @relation(fields: [company_id], references: [id]); @@index([company_id]) }
+model Invoice { id String @id @default(cuid()); company_id String; total_cents Int @default(0); tax_cents Int @default(0); province String @default("ON"); company Company @relation(fields: [company_id], references: [id]); entries LedgerEntry[]; @@index([company_id]) }
+model LedgerEntry { id String @id @default(cuid()); company_id String; invoice_id String; amount_cents Int; company Company @relation(fields: [company_id], references: [id]); invoice Invoice @relation(fields: [invoice_id], references: [id]); @@index([company_id]) }
